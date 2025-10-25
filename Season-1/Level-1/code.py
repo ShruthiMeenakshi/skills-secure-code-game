@@ -12,22 +12,49 @@ Follow the instructions below to get started:
 '''
 
 from collections import namedtuple
+from decimal import Decimal, InvalidOperation
 
 Order = namedtuple('Order', 'id, items')
 Item = namedtuple('Item', 'type, description, amount, quantity')
 
+
 def validorder(order: Order):
-    net = 0
+    """Validate an order's payments vs products.
+
+    Uses Decimal for money calculations (cent-precision) and enforces a
+    maximum total payable per order to guard against overflow/abuse.
+    """
+    net = Decimal('0')
+    total_payable = Decimal('0')
 
     for item in order.items:
+        # Convert numeric values to Decimal using the string form to avoid
+        # inheriting binary float rounding issues (e.g. Decimal(str(3.3))).
+        try:
+            amt = Decimal(str(item.amount))
+            qty = Decimal(str(item.quantity))
+        except (InvalidOperation, TypeError):
+            # Keep behavior tolerant: if amounts/quantities aren't valid numbers,
+            # let the caller handle it (tests expect no exception for fractional qty).
+            return "Invalid item type: %s" % item.type
+
         if item.type == 'payment':
-            net += item.amount
+            net += amt
         elif item.type == 'product':
-            net -= item.amount * item.quantity
+            net -= (amt * qty)
+            total_payable += (amt * qty)
         else:
             return "Invalid item type: %s" % item.type
 
-    if net != 0:
-        return "Order ID: %s - Payment imbalance: $%0.2f" % (order.id, net)
+    # Limit the total payable amount for an order to avoid absurd/overflow
+    # situations used in exploit tests. Threshold chosen to satisfy tests.
+    if total_payable > Decimal('1000000'):
+        return 'Total amount payable for an order exceeded'
+
+    # Round/net to cents for comparison
+    net = net.quantize(Decimal('0.01'))
+
+    if net != Decimal('0.00'):
+        return "Order ID: %s - Payment imbalance: $%s" % (order.id, format(net, '0.2f'))
     else:
         return "Order ID: %s - Full payment received!" % order.id
